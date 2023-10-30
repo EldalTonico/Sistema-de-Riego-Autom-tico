@@ -1,0 +1,102 @@
+#include <Wire.h>
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <BH1750.h>
+#include <Adafruit_AHTX0.h>
+
+BH1750 lightMeter;
+Adafruit_AHTX0 aht;
+
+int humedadSuelo = 0;
+const int valorSeco = 2500;
+const int valorMojado = 1100;
+const int sensor = A0;
+float temperaturaAht10 = 0;
+float humedadAht10 = 0;
+float lux = 0;
+
+const char* ssid = "Claro-nielsen";       
+const char* password = "24682030";  
+const int ledPin = 2;             
+int varTemp = 0;
+int varHum = 0;
+
+AsyncWebServer server(80);
+
+void setup() {
+  pinMode(A0, INPUT);
+  Serial.begin(115200);
+  Wire.begin();
+  lightMeter.begin();
+  aht.begin();
+  // Conéctate a la red WiFi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Conectando a la red WiFi...");
+  }
+  Serial.println("Conexión WiFi establecida");
+  Serial.print("Dirección IP asignada: ");
+  Serial.println(WiFi.localIP());
+  // Configura la ruta para la página web
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    String html = "<html lang=\"es\"><head><title>Sistema de riego</title><style>body {font-family: Arial, sans-serif;margin: 0;padding: 0;background-color: #405c74;}header {background-color: #333;color: white;text-align: center;padding: 20px;}section {padding: 20px;margin: 20px;background-color: #f0ecf4;border-radius: 5px;box-shadow: 0px 0px 5px 0px #888;}form {margin-bottom: 20px;}table {width: 100%;border-collapse: collapse;margin-top: 20px;}table th, table td {border: 1px solid #ccc;padding: 10px;}table th {background-color: #333;color: white;text-align: center;}table td {text-align: left;}footer {text-align: center;background-color: #333;color: white;padding: 10px;position: fixed;bottom: 0;width: 100%;}input[type='submit'] { background-color: #387cb4; color: white; padding: 10px 20px; border: none; cursor: pointer; margin-left: 5px; margin-top: 10px;}input[type='submit']:hover {background-color: #306494}@media screen and (max-width: 768px) {section {padding: 10px;margin: 10px;}input[type='number'] {width: 100%;}</style><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"></head><body><header><h1>Sistema de riego automático</h1></header><section><h1>Control de variables</h1><form action='/setNumber' method='POST'>Temperatura mínima (°C)<input type='number' name='temperatura' value='" + String(varTemp) + "'><br>Humedad mínima (%)<input type='number' name='humedad' value='" + String(varHum) + "' min='0' max='100'><br><input type='submit' value='Enviar'></form>";
+    html += "<table><tr><th colspan=\"2\" style=\"text-align:center\">Valores censados</th></tr><tr><td>Temperatura:</td><td><span id='temp'>" + String(temperaturaAht10) + " </span> °C</td></tr><tr><td>Humedad del suelo:</td><td><span id='humedad'>" + String(humedadSuelo) + " </span> %</td></tr><tr><td>Luz:</td><td><span id='lux'>" + String(lux) + " </span> lux</td></tr><tr><td>Humedad ambiente:</td><td><span id='humamb'>" + String(humedadAht10) + " </span> %</td></tr></table>";
+    html += "<script>setInterval(function() { fetch('/data').then(response => response.json()).then(data => { document.getElementById('temp').textContent = data.temperatura; document.getElementById('humedad').textContent = data.humedad; document.getElementById('lux').textContent = data.lux; document.getElementById('humamb').textContent = data.humamb; }); }, 1000);</script>";
+    html += "</section><section></section><footer>Instituto Politécnico San Arnoldo Janssen | Nielsen Alan - Valdez Lucio</footer></body></html>";
+    request->send(200, "text/html", html);
+  });
+
+  // Ruta para obtener datos en formato JSON
+  server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
+    String json = "{\"temperatura\":" + String(temperaturaAht10) + ",\"humedad\":" + String(humedadSuelo) + ",\"lux\":" + String(lux) + ",\"humamb\":" + String(humedadAht10) + "}";
+    request->send(200, "application/json", json);
+  });
+
+  // Configura la ruta para procesar el número ingresado
+  server.on("/setNumber", HTTP_POST, [](AsyncWebServerRequest *request){
+    String inputTemp = request->arg("temperatura");
+    varTemp = inputTemp.toInt();
+
+    String inputHum = request->arg("humedad");
+    varHum = inputHum.toInt();
+
+    request->send(200, "text/plain", "Variables establecidas");
+  });
+
+  // Inicializa el LED como salida
+  pinMode(ledPin, OUTPUT);
+
+  // Comienza el servidor web
+  server.begin();
+}
+
+void loop() {
+  int valorSensor = analogRead(sensor);
+
+  if(valorSensor >= valorMojado && valorSensor <= valorSeco){
+    humedadSuelo = map(valorSensor, valorSeco, valorMojado, 0, 100);
+  }
+  else{
+    if(valorSensor > valorSeco){
+      humedadSuelo = 0;
+    }
+    else if (valorSensor < valorMojado){
+      humedadSuelo = 100;
+    }
+  }
+
+  lux = lightMeter.readLightLevel();
+  sensors_event_t humidity, temp;
+  aht.getEvent(&humidity, &temp);
+  temperaturaAht10 = temp.temperature;
+  humedadAht10 = humidity.relative_humidity;
+
+  if ((varTemp < temperaturaAht10) && (varHum > humedadSuelo) && (lux < 500)) {
+    digitalWrite(2, HIGH); 
+  } else {
+    digitalWrite(2, LOW); 
+  }
+
+  delay(1000);
+}
